@@ -56,6 +56,18 @@ $Configurations = $Response | ConvertFrom-Json
 
 $CompanyName = ""
 
+$Days90Prior = (Get-date).AddDays(-90).ToString('yyyy-MM-ddTHH:mm:ssZ')
+$Response = Invoke-WebRequest -Method "GET" -Uri "https://$($Url)/$($info.Codebase)apis/3.0/service/tickets?conditions=dateEntered < [$($Days90Prior)]" -Headers $headers 
+$AttachedConfigurations = @()
+$Tickets = $Response | ConvertFrom-Json
+$Tickets | foreach {
+  $Response = Invoke-WebRequest -Method "GET" -Uri "https://$($Url)/$($info.Codebase)apis/3.0/service/tickets/$($_.id)/configurations" -Headers $headers 
+  $AttachedConfigurations += $Response | ConvertFrom-Json
+}
+
+Write-Host "Total Attached Configurations"
+Write-Host $AttachedConfigurations.Length
+
 $ConfigHashMap = @{}
 $ConfigCompanyHashMap = @{}
 $Configurations | foreach {
@@ -63,6 +75,7 @@ $Configurations | foreach {
     $ConfigHashMap[$_.type.name] = @{
       Count = 0
       Depth = 0
+      Tickets = 0
     }
   }
   $ConfigHashMap[$_.type.name].Count += 1
@@ -179,21 +192,27 @@ $Configurations | foreach {
     $ConfigCompanyHashMap[$_.company.name][$_.type.name] = @{
       Count = 0
       Quality = 0
+      Tickets = 0
     }
   }
   $ConfigCompanyHashMap[$_.company.name][$_.type.name].Count += 1
   $ConfigCompanyHashMap[$_.company.name][$_.type.name].Quality = 
     $ConfigCompanyHashMap[$_.company.name][$_.type.name].Quality + $Quality
 
-  $headers = @{}
-  $headers.Add("Accept","application/json; application/vnd.connectwise.com+json; version=3.0.0")
-  $headers.Add("Authorization","Basic $($EncodedText)")
+  $self = $_
+  $company = $_.company.name
+  $type = $_.type.name
+  $AttachedConfigurations | foreach {
+    If ($_.id -eq $self.id) {
+      $ConfigHashMap[$type].Tickets += 1
+      $ConfigCompanyHashMap[$company][$type].Tickets += 1
+    }
+  }
+
   $Response = Invoke-WebRequest -Method "GET" -Uri "https://$($Url)/$($info.Codebase)apis/3.0/system/audittrail?type=Configuration&id=$($_.id)" -Headers $headers 
   
   # Last Change
   # Avg Days Between Last 25 changes
-  $company = $_.company.name
-  $type = $_.type.name
   $index = 0;
   $AuditTrail = $Response | ConvertFrom-Json
   $AuditTrail | foreach {
@@ -226,6 +245,7 @@ $ConfigHashMap.Keys | % {
   $TableHtml += "<td style=""text-align: center;"">$([math]::Floor($ConfigHashMap.Item($_).LastChangedOn / $ConfigHashMap.Item($_).Count))</td>"
   $TableHtml += "<td style=""text-align: center;"">$([math]::Floor($ConfigHashMap.Item($_).Changes / $ConfigHashMap.Item($_).Count))</td>"
   $TableHtml += "<td style=""text-align: center;"">$($ConfigHashMap.Item($_).Changes -eq 0)</td>"
+  $TableHtml += "<td style=""text-align: center;"">$($ConfigHashMap.Item($_).Tickets)</td>"
   $TableHtml += "</tr>"
 }
 
@@ -241,7 +261,8 @@ $ConfigCompanyHashMap.Keys | % {
     $TableCompanyHtml += "<td style=""text-align: center;"">$([math]::Floor($item.Item($_).Quality / $item.Item($_).Count))</td>"
     $TableCompanyHtml += "<td style=""text-align: center;"">$([math]::Floor($item.Item($_).LastChangedOn / $item.Item($_).Count))</td>"
     $TableCompanyHtml += "<td style=""text-align: center;"">$([math]::Floor($item.Item($_).Changes / $item.Item($_).Count))</td>"
-    $TableCompanyHtml += "<td style=""text-align: center;"">$($item.Changes -eq 0)</td>"
+    $TableCompanyHtml += "<td style=""text-align: center;"">$($item.Item($_).Changes -eq 0)</td>"
+    $TableCompanyHtml += "<td style=""text-align: center;"">$($item.Item($_).Tickets)</td>"
     $TableCompanyHtml += "</tr>"
   }
 }
@@ -291,6 +312,7 @@ $html =
                     "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Avg Days Since Last Update</th>" +
                     "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Avg Number of Updates In Last 90 Days</th>" +
                     "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Contains Stale Configurations</th>" +
+                    "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Total Tickets Attached To</th>" +
                   "</tr>" +
                 "</thead>" +
                 "<tbody>" +
@@ -309,6 +331,7 @@ $html =
                     "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Avg Days Since Last Update</th>" +
                     "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Avg Number of Updates In Last 90 Days</th>" +
                     "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Contains Stale Configurations</th>" +
+                    "<th style=""padding-left: 12px;padding-right: 12px;vertical-align: bottom;padding: 8px;text-align: center;line-height: 1.42857143;border-top: 0;border-bottom: 0;"">Total Tickets Attached To</th>" +
                   "</tr>" +
                 "</thead>" +
                 "<tbody>" +
