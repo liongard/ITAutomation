@@ -386,4 +386,5 @@ for ($counter=0; $counter -lt $Results.OrganizationalUnits.Length; $counter++){
 }
 $Report += "Organizational Units: $($OrgUnitsReport)`r`n"
 
-$Report | Out-File -FilePath $OutFilePath -Encoding UTF8
+$now = $(Get-Date).tostring("MM-dd-yyyy")
+$Report | Out-File -FilePath "Active-Directory-Report-$($now).txt" -Encoding UTF8
