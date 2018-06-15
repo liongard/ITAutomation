@@ -7,10 +7,7 @@ Param(
   [string]$AdminUsername,
 
   [Parameter(Mandatory=$false, ValueFromPipeline=$true, ValueFromPipelineByPropertyName=$true)]
-  [string]$AdminPassword,
-
-  [Parameter(Mandatory=$true, ValueFromPipeline=$true, ValueFromPipelineByPropertyName=$true)]
-  [string]$OutFilePath
+  [string]$AdminPassword
 )
 
 Import-Module ActiveDirectory
@@ -210,15 +207,17 @@ Function Get-CommandResult {
     )
     $output = @{};
     try {
+        Write-Host "Running Command $($Command)"
         $output = $Command.invoke();
     }
     catch {
-        Write-Host "Command $Command failed. Exception: $($_.Exception.Message)"
+        #Write-Host "Command $Command failed. Exception: $($_.Exception.Message)"
     }
     return $output;
 }
 
 $Results = @{};
+Write-Host "Collecting AD Information"
 If ($AdminPassword -And $AdminUsername -And $ADServer) {
   $SecurePassword = $AdminPassword | ConvertTo-SecureString -AsPlainText -Force
   $Creds = New-Object System.Management.Automation.PSCredential($AdminUsername, $SecurePassword)
@@ -236,7 +235,7 @@ If ($AdminPassword -And $AdminUsername -And $ADServer) {
     'OrganizationalUnits' = Get-CommandResult {Get-ADOrganizationalUnit -Server $ADServer -Credential $Creds -Filter * -Properties $OrgUnitProps | select-object $OrgUnitProps};
     'DomainControllers' = Get-CommandResult {Get-ADDomainController -Server $ADServer -Credential $Creds -Filter *};
     'RootDSE' = $RootDSE;
-    'AccountPolicy' = Get-CommandResult {Get-ADObject $RootDSE.defaultNamingContext -Server $ADServer -Credential $Creds -Properties *};
+    'AccountPolicy' = Get-CommandResult {Get-ADDefaultDomainPasswordPolicy -Server $ADServer -Credential $Creds};
     'RawSites' = Get-CommandResult {Get-ADObject -Server $ADServer -Credential $Creds -SearchBase $siteContainerDN -filter { objectClass -eq "site" } -properties "siteObjectBL", name};
   }
 } Else {
@@ -254,7 +253,7 @@ If ($AdminPassword -And $AdminUsername -And $ADServer) {
     'OrganizationalUnits' = Get-CommandResult {Get-ADOrganizationalUnit -Filter * -Properties $OrgUnitProps | select-object $OrgUnitProps};
     'DomainControllers' = Get-CommandResult {Get-ADDomainController -Filter *};
     'RootDSE' = $RootDSE;
-    'AccountPolicy' = Get-CommandResult {Get-ADObject $RootDSE.defaultNamingContext -Properties *};
+    'AccountPolicy' = Get-CommandResult {Get-ADDefaultDomainPasswordPolicy};
     'RawSites' = Get-CommandResult {Get-ADObject -SearchBase $siteContainerDN -filter { objectClass -eq "site" } -properties "siteObjectBL", name};
   }
 }
@@ -272,6 +271,7 @@ $DOMAINMODES = @{
   "7" = "Windows 2016 Domain"
 }
 
+Write-Host "Generating Domain Information"
 $Report = "Active Directory`r`n"
 $Report += "----------------`r`n"
 $Report += "`r`n"
@@ -295,7 +295,7 @@ $Report += "Sites / Subnets: $($SiteSubnets)`r`n"
 $Report += "Primary Domain Controllers: $($Results.Domain.PDCEmulator)`r`n"
 $Report += "Infrastructure Masters: $($Results.Domain.InfrastructureMaster)`r`n"
 
-
+Write-Host "Generating Users/Device Information"
 $Report += "`r`n`r`nUsers/Devices`r`n"
 $Report += "----------------`r`n"
 $Report += "`r`n"
@@ -339,11 +339,35 @@ $Results.Users | foreach {
     $PrivilegedUsersReport += $_.DistinguishedName + " | "
   }
 }
-$Report += "Count of Users: $($UserStats.TotalUsers) Total | $($UserStats.ActiveUsers) Active | $($UserStats.LockedOutUsers) Locked Out | $($UserStats.ExpiredUsers) Expired | $($UserStats.DisabledUsers) Disabled | $($UserStats.DeletedUsers) Deleted`r`n"
-$Report += "Count of Privileged Users: $($CountPrivilegedUsers)`r`n"
+$Report += "User Summary: $($UserStats.TotalUsers) Total | $($UserStats.ActiveUsers) Active | $($UserStats.LockedOutUsers) Locked Out | $($UserStats.ExpiredUsers) Expired | $($UserStats.DisabledUsers) Disabled | $($UserStats.DeletedUsers) Deleted`r`n"
+$Report += "Total Privileged Users: $($CountPrivilegedUsers)`r`n"
 $Report += "Privileged Users: $($PrivilegedUsersReport)`r`n"
-$Report += "Count of Computers: $($Results.Computers.Length)`r`n"
 
+Write-Host "Generating User Groups Information"
+$Report += "Total Groups: $($Results.Groups.Length)`r`n"
+
+$Results.Groups | foreach {
+  $m = $_ | select -ExpandProperty Members
+  
+  If ($m.Length -gt 0) {
+    $Report += "$($_.Name): "
+    for ($counter=0; $counter -lt $m.Length; $counter++){
+      If ($m[$counter] -match "CN=([\w\d-\s]+)") {
+        $Results.Users | foreach {
+            If ($m[$counter] -eq $_.DistinguishedName) {
+                $Report += "$($_.DistinguishedName) | "
+            }
+        }
+      }
+    }
+
+    $Report += "`r`n"
+  }
+}
+
+$Report += "Total Computers: $($Results.Computers.Length)`r`n"
+
+Write-Host "Generating Computer Information"
 $ComputerTypes = @{}
 $Results.Computers | foreach {
   $Type = "Template"
@@ -374,8 +398,7 @@ for ($counter=0; $counter -lt $ComputerTypes.Keys.Length; $counter++){
     }
   }
 }
-$Report += "Count of Computer Types: $($ComputerTypesReport)`r`n"
-$Report += "Count of Printers: $($Results.Printers.Length)`r`n"
+$Report += "Total Computer Types: $($ComputerTypesReport)`r`n"
 
 $OrgUnitsReport = ""
 for ($counter=0; $counter -lt $Results.OrganizationalUnits.Length; $counter++){
@@ -386,5 +409,17 @@ for ($counter=0; $counter -lt $Results.OrganizationalUnits.Length; $counter++){
 }
 $Report += "Organizational Units: $($OrgUnitsReport)`r`n"
 
+Write-Host "Generating Account Policy Information"
+$Report += "`r`n`r`nACCOUNT POLICY`r`n"
+$Report += "Policy - Minimum Password Length: $($Results.AccountPolicy.MinPasswordLength)`r`n"
+$Report += "Policy - Password Complexity Requirement: $($Results.AccountPolicy.ComplexityEnabled)`r`n"
+$Report += "Policy - Password History Count: $($Results.AccountPolicy.PasswordHistoryCount)`r`n"
+$Report += "Policy - Max Password Age (days): $($Results.AccountPolicy.MaxPasswordAge)`r`n"
+$Report += "Policy - Min Password Age (days): $($Results.AccountPolicy.MinPasswordAge)`r`n"
+$Report += "Policy - Account Lockout Threshold: $($Results.AccountPolicy.LockoutThreshold)`r`n"
+$Report += "Policy - Account Lockout Duration (hours:minutes:seconds): $($Results.AccountPolicy.LockoutDuration)`r`n"
+$Report += "Policy - Account Lockout Observation Windows (hours:minutes:seconds): $($Results.AccountPolicy.LockoutObservationWindow)`r`n"
+
 $now = $(Get-Date).tostring("MM-dd-yyyy")
+Write-Host "Writing Report to Active-Directory-Report-$($now).txt"
 $Report | Out-File -FilePath "Active-Directory-Report-$($now).txt" -Encoding UTF8
